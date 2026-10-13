@@ -1,5 +1,5 @@
 // オフライン用 Service Worker (自動生成: build_pwa.py)
-const CACHE = 'soccer-record-2026-10-07';
+const CACHE = 'soccer-record-2026-10-13';
 const FILES = ['./', 'index.html', 'manifest.json', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));

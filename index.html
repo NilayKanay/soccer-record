@@ -952,7 +952,7 @@ function syncSchoolDbSeedEl(){
 const SCHOOL_DB_CURATED_KEY = 'soccerRecordApp_schoolDB_curated_v1';
 let SchoolSeedBannerOn = false;
 // 起動時の状態（「学校データ」タブの診断表示用）。受け取った側の画面を見て原因を切り分けるために使う。
-const APP_BUILD = '2026-10-07';
+const APP_BUILD = '2026-10-13';
 let SchoolStartInfo = { localStored: false, localCount: 0 };
 // ファイル内の学校データ（初期値）を使って開いたか。開いた直後の状態表示で「入っている」ことを知らせる。
 let SchoolSeedApplied = false;
@@ -1116,6 +1116,46 @@ function parseRosterTemplateXlsx(wb){
     }));
   if(!schoolName && players.length===0) return null;
   return { schoolName, managerName, players, sheetName: ROSTER_TEMPLATE_SHEET_NAME };
+}
+
+// 登録済みの全校ぶんの学校データを1つのExcelにまとめた「学校データ一式」。
+// 事務局が参加校を登録したあとに書き出して記録員へ渡し、記録員は「参加申込書から学校を追加」で
+// 1回読み込むだけで全校が登録できる（タブレットなどHTMLファイルを直接開けない端末向け）。
+// 1シート・1行1選手（学校名・監督名は選手ごとの行に繰り返す）という単純な形で、人が見て直すこともできる。
+const ALL_SCHOOLS_SHEET_NAME = '全校学校データ';
+function exportAllSchools(){
+  const names = Object.keys(SchoolDB).sort();
+  if(names.length === 0){ alert('登録されている学校がありません。'); return; }
+  const rows = [['学校名','監督名','背番号','位置','氏名']];
+  names.forEach(n=>{
+    const s = SchoolDB[n];
+    if(!s.players || s.players.length === 0){ rows.push([n, s.manager||'', '', '', '']); return; }
+    s.players.forEach(p=>rows.push([n, s.manager||'', String(p.no||''), String(p.pos||''), String(p.name||'')]));
+  });
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = [{wch:22},{wch:16},{wch:8},{wch:8},{wch:20}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, ALL_SCHOOLS_SHEET_NAME);
+  const comp = sanitizeForFileName(((M && M.meta && M.meta.competition) || '').trim());
+  XLSX.writeFile(wb, '学校データ一式' + (comp ? '_' + comp : '') + '.xlsx');
+}
+function parseAllSchoolsXlsx(wb){
+  const ws = wb.Sheets[ALL_SCHOOLS_SHEET_NAME];
+  if(!ws) return null;
+  const aoa = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+  const map = {};
+  aoa.slice(1).forEach(r=>{
+    const school = String(r[0]||'').trim();
+    if(!school) return;
+    const t = map[school] || (map[school] = { schoolName: school, managerName: '', players: [] });
+    const mgr = String(r[1]||'').trim();
+    if(mgr && !t.managerName) t.managerName = mgr;
+    const no = toHalfWidth(String(r[2]||'')).trim();
+    const name = String(r[4]||'').trim();
+    if(no || name) t.players.push({ no, pos: toHalfWidth(String(r[3]||'')).trim().toUpperCase(), name });
+  });
+  const list = Object.values(map);
+  return list.length ? list : null;
 }
 
 // 北海道高専U-19サッカー新人大会の「参加申込書」Excel（毎年使われる全道高専共通フォーマット）を
@@ -1925,6 +1965,15 @@ const app = {
         // 誤って1校分の名簿として登録してしまうことがある。
         if(wb.SheetNames.includes('_RawData')){
           throw new Error('このファイルは参加申込書ではなく、本アプリの「試合記録データを保存（Excel）」で書き出した試合記録ファイルのようです。参加申込書のExcelファイルを選んでください。');
+        }
+        const multi = parseAllSchoolsXlsx(wb); // このアプリが書き出した「学校データ一式」（全校ぶんを1ファイルにまとめたもの）
+        if(multi){
+          multi.forEach(r=>{
+            const isUpd = !!SchoolDB[r.schoolName];
+            SchoolDB[r.schoolName] = { name: r.schoolName, manager: r.managerName, players: r.players };
+            (isUpd ? updated : added).push(r.schoolName);
+          });
+          continue;
         }
         let result = parseRosterTemplateXlsx(wb); // このアプリ配布の空テンプレート（最優先・様式を完全に把握しているため確実）
         if(!result) result = parseHokkaidoU19ApplicationXlsx(wb); // 北海道高専U-19サッカー新人大会の統一フォーマット
@@ -2743,6 +2792,19 @@ function renderSchools(){
     addRow.appendChild(removeAllBtn);
   }
   c.appendChild(addRow);
+
+  if(names.length > 0){
+    const bundleRow = document.createElement('div');
+    bundleRow.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;';
+    const bundleBtn = document.createElement('button'); bundleBtn.className = 'small-btn';
+    bundleBtn.textContent = '全校の学校データを書き出し（Excel）';
+    bundleBtn.title = '登録済みの全校の選手名簿を1つのExcelファイルにまとめて書き出します。';
+    bundleBtn.onclick = ()=>exportAllSchools();
+    const bundleNote = document.createElement('span'); bundleNote.className = 'hint';
+    bundleNote.textContent = '登録済みの全校を1つのExcelにまとめます。記録員の端末では「参加申込書から学校を追加」でこのファイルを1回読み込むだけで、全校が登録できます（タブレットなどHTMLファイルを開けない端末向け）。';
+    bundleRow.appendChild(bundleBtn); bundleRow.appendChild(bundleNote);
+    c.appendChild(bundleRow);
+  }
 
   const distRow = document.createElement('div');
   distRow.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px;';
