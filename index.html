@@ -952,7 +952,7 @@ function syncSchoolDbSeedEl(){
 const SCHOOL_DB_CURATED_KEY = 'soccerRecordApp_schoolDB_curated_v1';
 let SchoolSeedBannerOn = false;
 // 起動時の状態（「学校データ」タブの診断表示用）。受け取った側の画面を見て原因を切り分けるために使う。
-const APP_BUILD = '2026-10-13';
+const APP_BUILD = '2026-10-13b';
 let SchoolStartInfo = { localStored: false, localCount: 0 };
 // ファイル内の学校データ（初期値）を使って開いたか。開いた直後の状態表示で「入っている」ことを知らせる。
 let SchoolSeedApplied = false;
@@ -4658,6 +4658,11 @@ function buildPrintSheetHTML(mode){
     </tr>`;
   }).join('');
 
+  // 左右で選手数が違うとき、少ない側の不足行を埋める空欄セル。選手が入っている行と同じ11列・同じ
+  // セルの種類（シュート欄はtally等）にして、罫線・列幅が入力済みの行と同じ分割になるようにする
+  const blankLeftCells = '<td></td><td></td><td class="tally"></td><td class="tally"></td><td class="tally"></td><td class="tally"></td><td></td><td></td><td class="name-cell"></td><td></td><td></td>';
+  const blankRightCells = '<td></td><td></td><td class="name-cell"></td><td></td><td class="tally"></td><td class="tally"></td><td class="tally"></td><td class="tally"></td><td></td><td></td><td></td>';
+
   // チーム合計は7行（シュート/GK/CK/直接FK/間接FK/オフサイド/PK）あるため、警告・退場も同じ行数まで空欄で揃える
   const CAUTION_MIN_ROWS = 7;
   const cautionRows = (T)=>{
@@ -4791,7 +4796,7 @@ function buildPrintSheetHTML(mode){
       </tr>
       </thead>
       <tbody>
-        ${zipRows(leftRosterRows, rightRosterRows)}
+        ${zipRows(leftRosterRows, rightRosterRows, blankLeftCells, blankRightCells)}
       </tbody>
     </table>
     <div class="hint" style="margin-top:2px;">「シュート」欄は2本を1組の✕（1本目＝＼、2本目＝／）で表し、左から右へ、1本目・2本目・3本目…の順に並びます。得点になったシュートは、そのストロークの先端（上側）に丸を付けています。「交代」の「No」は交代した相手選手の背番号です。</div>
@@ -4941,14 +4946,14 @@ function fitPrintSheetToOnePage(){
 }
 
 // 左右チームの<tr>群を1行ずつ交互に組み合わせ、1つの<tr>に左右12セルとして結合する
-function zipRows(leftHtml, rightHtml){
+function zipRows(leftHtml, rightHtml, blankLeft, blankRight){
   const leftCells = extractRowCells(leftHtml);
   const rightCells = extractRowCells(rightHtml);
   const rowCount = Math.max(leftCells.length, rightCells.length);
   let out = '';
   for(let i=0;i<rowCount;i++){
-    const l = leftCells[i] || '<td colspan="6"></td>';
-    const r = rightCells[i] || '<td colspan="6"></td>';
+    const l = leftCells[i] || blankLeft;
+    const r = rightCells[i] || blankRight;
     out += `<tr>${l}${r}</tr>`;
   }
   return out;
