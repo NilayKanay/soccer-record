@@ -61,6 +61,9 @@ th{background:#eef2f5;font-weight:600;color:var(--ink-soft);white-space:nowrap;}
 .num{text-align:center;}
 
 /* ---- app shell ---- */
+/* 上部バーはボタンが増えると2段・3段に折り返して高さが変わる（タブレットでは約100px）。以前は下のタブを
+   「top:44px」という固定値で固定していたため、バーが2段になるとタブがバーの裏に隠れて見えなくなっていた。
+   バーもタブも常に画面の上部に固定したまま、タブの位置はバーの実際の高さ（--topbar-h。JSで測って設定）に合わせる。 */
 .topbar{
   position:sticky;top:0;z-index:50;
   background:var(--ink);color:#fff;
@@ -78,7 +81,7 @@ th{background:#eef2f5;font-weight:600;color:var(--ink-soft);white-space:nowrap;}
 .status{font-size:11px;color:#cfe0d5;white-space:nowrap;}
 
 .tabs{
-  position:sticky;top:44px;z-index:49;
+  position:sticky;top:var(--topbar-h,44px);z-index:49;
   background:#fff;border-bottom:1px solid var(--line);
   display:flex;overflow-x:auto;
 }
@@ -87,6 +90,9 @@ th{background:#eef2f5;font-weight:600;color:var(--ink-soft);white-space:nowrap;}
   border-bottom:3px solid transparent;white-space:nowrap;font-size:13px;
 }
 .tabs button.active{color:var(--accent);border-bottom-color:var(--accent);}
+.tabs .undo-box{margin-left:auto;display:flex;gap:6px;align-items:center;padding:0 10px;position:sticky;right:0;background:#fff;flex-shrink:0;}
+.tabs .undo-box button{background:var(--accent-soft);color:var(--accent);padding:6px 12px;border-bottom:none;font-size:12.5px;}
+.tabs .undo-box button:disabled{opacity:.4;cursor:default;}
 
 main{max-width:1180px;margin:0 auto;padding:14px 14px 60px;}
 .section{display:none;}
@@ -119,6 +125,8 @@ main{max-width:1180px;margin:0 auto;padding:14px 14px 60px;}
 table.roster input,table.roster select{padding:3px 4px;font-size:12.5px;min-width:52px;}
 table.roster input[type=text]{min-width:90px;}
 table.roster input.num{min-width:34px;max-width:50px;width:100%;}
+/* 数字などを入れる四角い枠は，列の幅が枠より広いと左に寄って見えるため，セルの中央に置く */
+td > input.num{display:block;margin-left:auto;margin-right:auto;text-align:center;}
 table.roster th{font-size:11px;}
 table.roster tr.starter-row td{background:#bfe5cf;}
 table.roster tr.bench-row td{background:#d6c9ee;}
@@ -186,8 +194,11 @@ table.roster tr.starter-boundary td{border-bottom:2px solid var(--accent);}
 .goal-compact-score{margin-left:auto;font-weight:700;font-size:19px;}
 .goal-compact-desc{margin-top:6px;font-size:17px;color:var(--ink);font-weight:500;line-height:1.5;}
 .goal-compact-btns{display:flex;gap:6px;margin-top:8px;}
-.goal-compact-btns .small-btn{padding:4px 10px;font-size:11.5px;}
-.goal-compact-btns .del-btn{padding:4px 10px;font-size:11.5px;}
+/* 「編集」(small-btn)と「削除」(del-btn)は別々のスタイルで，余白(margin-top:8px)・文字サイズ・角の丸みが違い，
+   並べると大きさが揃わなかった。同じ寸法を指定して揃える */
+.goal-compact-btns .small-btn,.goal-compact-btns .del-btn{
+  margin:0;padding:6px 16px;min-width:64px;font-size:12px;line-height:1.3;border-radius:6px;
+}
 
 .pk-grid{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;}
 .pk-grid-rows{display:flex;flex-direction:column;gap:6px;margin-top:6px;}
@@ -952,7 +963,7 @@ function syncSchoolDbSeedEl(){
 const SCHOOL_DB_CURATED_KEY = 'soccerRecordApp_schoolDB_curated_v1';
 let SchoolSeedBannerOn = false;
 // 起動時の状態（「学校データ」タブの診断表示用）。受け取った側の画面を見て原因を切り分けるために使う。
-const APP_BUILD = '2026-10-13b';
+const APP_BUILD = '2026-10-20';
 let SchoolStartInfo = { localStored: false, localCount: 0 };
 // ファイル内の学校データ（初期値）を使って開いたか。開いた直後の状態表示で「入っている」ことを知らせる。
 let SchoolSeedApplied = false;
@@ -2076,8 +2087,11 @@ const app = {
     M.teamInfo[side].name = schoolName;
     M.teamInfo[side].manager = school.manager || '';
     M[teamKey].name = schoolName;
+    // 以前は25行になるまで空行を足していたため，15名の学校だと10行ぶんを手作業で消す必要があった。
+    // 登録されている人数ぶんだけの行にする（足りなければ「選手行を追加」で増やせる）。
+    // 選手が1人もいない学校データのときだけ，空行を1行残して表が空にならないようにする。
     const newPlayers = school.players.map(p=>({no:p.no, pos:p.pos, name:p.name, role:'', scratched:false}));
-    while(newPlayers.length < 25) newPlayers.push(emptyInfoPlayer());
+    if(newPlayers.length === 0) newPlayers.push(emptyInfoPlayer());
     M.teamInfo[side].players = newPlayers;
     markDirty();
     renderSection('info');
@@ -2545,7 +2559,70 @@ const app = {
   }
 };
 
-function markDirty(){ dirty = true; document.getElementById('statusText').textContent = "未保存の変更あり"; scheduleAutoSave(); }
+function markDirty(){ dirty = true; document.getElementById('statusText').textContent = "未保存の変更あり"; scheduleAutoSave(); undoRecordSoon(); }
+
+/* =========================================================
+   元に戻す／やり直し
+   試合記録(M)の内容を，入力が一段落するたび（最後の変更から0.7秒後）に丸ごと控えておき，
+   「元に戻す」で1つ前の控えへ，「やり直し」で戻す前の状態へ移る。
+   ・1文字ごとではなく，入力が止まるごとにひとまとまりにする（Wordの元に戻すと同じ感覚）
+   ・対象は試合記録の内容。学校データ（登録した参加校）は対象外
+   ・ブラウザの入力欄自体のCtrl+Zは別に働くので，入力欄の外にいるときだけCtrl+Zを受け付ける
+========================================================= */
+const UndoStack = {past:[], future:[], cur:null, timer:null, MAX:40};
+// 起動直後（自動保存の復元が済んだ後）の状態を，最初の「戻り先」として控えておく
+function undoInit(){ UndoStack.cur = JSON.stringify(M); updateUndoButtons(); }
+function undoRecordSoon(){
+  if(UndoStack.timer) clearTimeout(UndoStack.timer);
+  UndoStack.timer = setTimeout(undoCapture, 700);
+}
+function undoCapture(){
+  if(UndoStack.timer){ clearTimeout(UndoStack.timer); UndoStack.timer = null; }
+  const json = JSON.stringify(M);
+  if(UndoStack.cur === null){ UndoStack.cur = json; updateUndoButtons(); return; }
+  if(json === UndoStack.cur) return;
+  UndoStack.past.push(UndoStack.cur);
+  if(UndoStack.past.length > UndoStack.MAX) UndoStack.past.shift();
+  UndoStack.future = [];
+  UndoStack.cur = json;
+  updateUndoButtons();
+}
+function undoApplyState(json){
+  M = JSON.parse(json);
+  normalizePk(M); normalizeTotals(M); normalizeTeamInfo(M);
+  UndoStack.cur = json;
+  dirty = true;
+  document.getElementById('statusText').textContent = "未保存の変更あり";
+  scheduleAutoSave();
+  render();
+  updateUndoButtons();
+}
+function undoStep(){
+  undoCapture();                       // 直前の入力がまだ控えられていなければ先に控える
+  if(UndoStack.past.length === 0) return;
+  UndoStack.future.push(UndoStack.cur);
+  undoApplyState(UndoStack.past.pop());
+}
+function redoStep(){
+  undoCapture();
+  if(UndoStack.future.length === 0) return;
+  UndoStack.past.push(UndoStack.cur);
+  undoApplyState(UndoStack.future.pop());
+}
+function updateUndoButtons(){
+  const u = document.getElementById('undoBtn'), r = document.getElementById('redoBtn');
+  if(u) u.disabled = UndoStack.past.length === 0 && !UndoStack.timer;
+  if(r) r.disabled = UndoStack.future.length === 0;
+}
+document.addEventListener('keydown', e=>{
+  if(!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  const k = (e.key || '').toLowerCase();
+  if(k !== 'z' && k !== 'y') return;
+  const t = e.target;
+  if(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+  e.preventDefault();
+  if(k === 'y' || e.shiftKey) redoStep(); else undoStep();
+});
 
 /* =========================================================
    タブ構成
@@ -2576,13 +2653,33 @@ function renderTabs(){
     const b = document.createElement('button');
     b.textContent = t.label;
     b.className = t.id===activeTab ? 'active':'';
-    b.onclick = ()=>{ activeTab = t.id; renderTabs(); renderMain(); };
+    // タブを切り替えたときは，新しいタブの先頭から見せる（再描画で位置を保つ処理の対象外）
+    b.onclick = ()=>{ activeTab = t.id; renderTabs(); renderMain(); window.scrollTo(0, 0); };
     el.appendChild(b);
   });
+  // 「元に戻す／やり直し」は，常に画面上部に固定されているタブの右端に置く（スクロールしても押せる）
+  const hist = document.createElement('div');
+  hist.className = 'undo-box';
+  hist.innerHTML = '<button type="button" id="undoBtn" title="ひとつ前の状態に戻す（入力欄の外ではCtrl+Zでも可）">↶ 元に戻す</button>'
+                 + '<button type="button" id="redoBtn" title="元に戻す前の状態に進む（Ctrl+Y）">↷ やり直し</button>';
+  hist.querySelector('#undoBtn').onclick = undoStep;
+  hist.querySelector('#redoBtn').onclick = redoStep;
+  el.appendChild(hist);
+  updateUndoButtons();
 }
 
 function renderMain(){
   const el = document.getElementById('mainArea');
+  // 全体を作り直す間，高さを保って画面が上に戻らないようにし，入力中の欄があれば作り直した後にそこへ戻す
+  const keepY = window.scrollY;
+  const keepH = el.offsetHeight;
+  const ae = document.activeElement;
+  let keepFocus = null;
+  if(ae && el.contains(ae)){
+    const s = ae.closest('.section');
+    if(s) keepFocus = Object.assign({secId: s.id}, captureFocusIn(s));
+  }
+  if(keepH > 0) el.style.minHeight = keepH + 'px';
   el.innerHTML = "";
   TABS.forEach(t=>{
     const sec = document.createElement('div');
@@ -2599,25 +2696,123 @@ function renderMain(){
   renderSection('pk');
   renderSection('sig');
   renderSection('review');
+  window.scrollTo(0, keepY);
+  requestAnimationFrame(()=>{ el.style.minHeight = ''; });
+  if(keepFocus && keepFocus.idx >= 0){
+    Promise.resolve().then(()=>{ const s = document.getElementById(keepFocus.secId); if(s) restoreFocusIn(s, keepFocus); });
+  }
+}
+
+/* ---- 再描画で失われる状態（画面位置・入力中の欄）を保つ ----
+   このアプリは入力のたびに該当セクションを丸ごと作り直す（innerHTML を空にして組み直す）作りのため，
+   そのままだと次の2つが起きていた。
+   ① 空にした瞬間に画面の高さが縮み，ブラウザが表示位置を先頭付近へ自動的に引き戻す（＝画面が上に戻る）。
+   ② 入力中の欄が作り直しで消え，カーソル（フォーカス）が外れる。
+   clearSection は，空にする前に高さを固定して位置を保ち，入力中の欄の位置（何番目の欄か・カーソル位置）を覚えておき，
+   組み直し終わった直後に同じ番号の欄へフォーカスを戻す。 */
+const FOCUSABLE_SEL = 'input:not([type=hidden]):not([type=file]),select,textarea';
+function captureFocusIn(sec){
+  const ae = document.activeElement;
+  if(!ae || !sec.contains(ae)) return {idx:-1};
+  const list = Array.from(sec.querySelectorAll(FOCUSABLE_SEL));
+  const idx = list.indexOf(ae);
+  let s = null, e = null;
+  try{ s = ae.selectionStart; e = ae.selectionEnd; }catch(_){ /* number 等はカーソル位置を取得できない */ }
+  return {idx, s, e};
+}
+function restoreFocusIn(sec, f){
+  const cur = document.activeElement;
+  if(cur && cur !== document.body && sec.contains(cur)) return; // 別の処理が既にフォーカスを移した場合は尊重する
+  const el = Array.from(sec.querySelectorAll(FOCUSABLE_SEL))[f.idx];
+  if(!el) return;
+  try{ el.focus({preventScroll:true}); }catch(_){ el.focus(); }
+  try{ if(f.s !== null && f.s !== undefined) el.setSelectionRange(f.s, f.e); }catch(_){}
+}
+/* ---- Enterキーで次の欄へ ----
+   入力欄でEnterを押すと，次の入力欄へフォーカスを移す（Shift+Enterで前の欄）。変換中のEnterは対象外。
+   選手名簿の「番号」欄でEnterを押したときは，欄を離れる処理（チーム情報から位置・氏名を自動入力）が済んだ後，
+   位置・氏名が入っていれば，それらを飛ばして「得点」欄へ進む（入っていなければ「位置」欄へ）。
+   欄を離れる処理は画面を作り直すことがあるため，先に欄を離して（blur）から，作り直し後の画面で次の欄を探す。 */
+function navInputs(sec){
+  return Array.from(sec.querySelectorAll('input,textarea')).filter(el=>{
+    const t = (el.type || '').toLowerCase();
+    if(['hidden','file','checkbox','radio','button','submit'].includes(t)) return false;
+    return !el.readOnly && !el.disabled && el.offsetParent !== null; // 閉じている説明の中など，見えない欄は除く
+  });
+}
+document.addEventListener('keydown', e=>{
+  if(e.key !== 'Enter' || e.isComposing || e.keyCode === 229 || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if(!t || t.tagName !== 'INPUT') return;
+  const type = (t.type || '').toLowerCase();
+  if(['checkbox','radio','file','button','submit'].includes(type)) return;
+  const sec = t.closest('.section');
+  if(!sec) return;
+  const secId = sec.id;
+  const list = navInputs(sec);
+  const idx = list.indexOf(t);
+  if(idx < 0) return;
+  e.preventDefault();
+  const dir = e.shiftKey ? -1 : 1;
+  const td = t.closest('td'), tr = t.closest('tr');
+  const rowIdx = tr && tr.parentNode ? Array.from(tr.parentNode.children).indexOf(tr) : -1;
+  const colIdx = td && tr ? Array.from(tr.children).indexOf(td) : -1;
+  const isRosterNo = (secId === 'sec-teamA' || secId === 'sec-teamB') && colIdx === 1 && !!t.closest('table.roster');
+  t.blur(); // ここで「欄を離れる処理」が走り，画面が作り直されることがある
+  const sec2 = document.getElementById(secId) || sec;
+  const list2 = navInputs(sec2);
+  let next = list2[idx + dir];
+  if(isRosterNo && dir === 1 && rowIdx >= 0){
+    const row = sec2.querySelectorAll('table.roster tbody tr')[rowIdx];
+    if(row){
+      const pos = row.children[2] && row.children[2].querySelector('input');
+      const name = row.children[3] && row.children[3].querySelector('input');
+      const goals = row.children[4] && row.children[4].querySelector('input');
+      if(pos && name && goals && pos.value.trim() && name.value.trim()) next = goals;
+    }
+  }
+  if(next){
+    try{ next.focus({preventScroll:false}); }catch(_){ next.focus(); }
+    try{ if(next.type === 'text') next.select(); }catch(_){}
+  }
+});
+
+let HintCtx = {sec:'', n:{}};
+const HintOpen = new Set(); // 開いたままにしておく説明の目印（再描画しても閉じないようにする）
+function clearSection(sec){
+  const f = captureFocusIn(sec);
+  const h = sec.offsetHeight;
+  if(h > 0) sec.style.minHeight = h + 'px';
+  HintCtx = {sec: sec.id, n: {}};
+  sec.innerHTML = "";
+  requestAnimationFrame(()=>{ sec.style.minHeight = ''; });
+  if(f.idx >= 0) Promise.resolve().then(()=>restoreFocusIn(sec, f));
 }
 
 /* ---- 汎用ヘルパー ---- */
 // 折りたたみ式のヒント説明（＋で全文展開、−で閉じる）。カード上部に置いても邪魔にならないようにする
+// 「得点を追加」などで画面が作り直されても，開いていた説明が閉じないよう，開閉の状態を覚えておく。
+// 目印は「どのセクションの・どの説明か・同じ説明の何番目か」で決める（得点ごとの記入例のように同じ文が並ぶため）。
 function collapsibleHint(html, openLabel, closeLabel){
   openLabel = openLabel || '＋ 使い方の説明を見る';
   closeLabel = closeLabel || '－ 説明を閉じる';
+  const base = HintCtx.sec + '|' + openLabel + '|' + html.length + '|' + html.slice(0, 24);
+  HintCtx.n[base] = (HintCtx.n[base] || 0) + 1;
+  const key = base + '#' + HintCtx.n[base];
   const wrap = document.createElement('div');
   wrap.className = 'hint-collapsible';
   const toggleBtn = document.createElement('button');
   toggleBtn.type = 'button'; toggleBtn.className = 'hint-toggle-btn';
   const body = document.createElement('div');
-  body.className = 'hint'; body.style.display = 'none';
+  body.className = 'hint';
   body.innerHTML = html;
-  let expanded = false;
+  let expanded = HintOpen.has(key);
+  body.style.display = expanded ? 'block' : 'none';
   const updateBtn = ()=>{ toggleBtn.textContent = expanded ? closeLabel : openLabel; };
   updateBtn();
   toggleBtn.onclick = ()=>{
     expanded = !expanded;
+    if(expanded) HintOpen.add(key); else HintOpen.delete(key);
     body.style.display = expanded ? 'block' : 'none';
     updateBtn();
   };
@@ -2746,7 +2941,7 @@ function handleInfoPaste(e, side, rowIndex, colIndex){
 
 function renderSchools(){
   const sec = document.getElementById('sec-schools');
-  sec.innerHTML = "";
+  clearSection(sec);
   const c = document.createElement('div'); c.className='card';
   c.innerHTML = "<h2>学校データ管理</h2>";
   c.appendChild(collapsibleHint(`大会に参加する学校の「参加申込書」（Excel）をあらかじめ読み込んでおくと、「チーム情報」タブでプルダウンから選ぶだけで選手名簿（背番号・位置・氏名）を自動反映できます。複数の申込書をまとめて選択して一括登録することもできます。<br>参加校の様式がバラバラで読み込みがうまくいかない場合は、「空の参加申込書テンプレートを書き出し（Excel）」で作った空のファイルを配布し、それに直接記入して提出してもらう方法もあります。この様式は完全に把握済みのため、確実に読み込めます。<br>対応フォーマット：「全国高専サッカー大会申込」というシートを含む、全国高専サッカー大会の統一参加申込書のほか、背番号・位置・氏名に相当する項目があれば他大会のフォーマットにもある程度対応できます。<br>【参照しているセル（全国高専フォーマット）】学校名：D11＋M11／監督名：M20／選手データ（最大20名）：T3・T5・T7…T41（1行おき）＝各選手の背番号、U3・U5…U41（同じ行）＝位置、V4・V6…V42（1行下）＝氏名（漢字）。丸囲み数字（①②③…）の背番号にも対応しています。<br>登録した学校データは、この端末のこのブラウザに自動保存され、ページを再読み込みしたり閉じて開き直したりしても消えません（大会が近づいたら参加校ぶんまとめて読み込んでおけば、当日は読み込み直す必要はありません）。ただし別の端末・別のブラウザには引き継がれないため、その場合は同じ参加申込書を読み込み直してください。<br>読み込めない申込書や読み込みに不具合がある申込書は、今後の対応のため soccer.record.app@gmail.com までファイルをお送りください。`));
@@ -2849,7 +3044,7 @@ function renderSchools(){
 
 function renderInfo(){
   const sec = document.getElementById('sec-info');
-  sec.innerHTML = "";
+  clearSection(sec);
   [['a','A',M.teamA.name||'Aチーム'],['b','B',M.teamB.name||'Bチーム']].forEach(([side,letter,teamName])=>{
     const card = document.createElement('div'); card.className='card';
     card.innerHTML = `<h2>チーム情報　<span class="badge ${letter.toLowerCase()}">${letter}</span> ${teamName}</h2>`;
@@ -3007,7 +3202,7 @@ function renderInfo(){
 
 function renderMeta(){
   const sec = document.getElementById('sec-meta');
-  sec.innerHTML = "";
+  clearSection(sec);
   const c1 = document.createElement('div'); c1.className='card';
   c1.innerHTML = "<h2>大会・会場情報</h2>";
   const g1 = document.createElement('div'); g1.className='grid g4';
@@ -3277,7 +3472,7 @@ function handleRosterPaste(e, teamKey, rowIndex, colIndex, letter){
 
 function renderTeam(teamKey, letter){
   const sec = document.getElementById('sec-'+teamKey);
-  sec.innerHTML = "";
+  clearSection(sec);
   const T = M[teamKey];
 
   // --- チーム名・監督 ---
@@ -3402,11 +3597,12 @@ function renderTeam(teamKey, letter){
   roster.appendChild(rosterHeader);
   roster.appendChild(collapsibleHint(`背番号を入力して欄を離れると、「チーム情報」タブに登録済みの選手であれば位置・選手名が自動で入ります（抹消された選手は対象外です）。<br>「得点本目」欄は数字のみ入力できます。同じ期間に2点目以降を記録するときは、まず対象の行の「得点本目」欄をタップしてから、その列の見出し（例：「S前半」列の下）にある「＋」ボタンを押すとカンマが自動で入り、続けて次の本数を入力できます（カンマの手入力は不要です）。<br>「交代時間」欄は数字とハーフタイムを表す「HT」が入力できます。アディショナルタイムでの交代は、対象行の「交代時間」欄をタップしてから、見出しの「＋」ボタンを押すと「+」が自動で入り、続けてアディショナルタイムの分数を入力できます（例：40の後に＋ボタン→3で「40+3」）。ハーフタイム中の交代は「HT」とそのまま入力してください。<br>「延長戦の列を追加」ボタン（見出し右上）を押すと、「S延前」「S延後」の得点本目列が表示され、交代時間見出しに「延前・前」ボタンも現れます（延長前半開始前の交代は、対象行をタップしてこのボタンを押すと「延前」と入力されます）。「延長戦の列を隠す」を押しても入力済みのデータは消えません。この操作はAチーム・Bチーム両方に反映されます。<br>【交代の記載ルール】交代を記録するときは、<b>退場する選手</b>の行に「交代時間」だけを記入します（「背番号(交代相手)」は空欄のままにします）。<b>入場する選手</b>の行の「背番号(交代相手)」に、退場した選手の背番号を記入します（「交代時間」は空欄のままにします）。これは、途中出場した選手が後でさらに別の選手と交代する場合にも対応できるようにするためです。もし入場時にも交代時間を書いてしまうと、その選手が後で退場する際の交代時間を記入する欄がなくなってしまいます。「交代時間」欄は退場時の記録専用、「背番号(交代相手)」欄は入場時の記録専用と覚えてください。`));
 
-  const rosterGoalWarnings = computeGoalConsistencyWarnings(T, letter);
-  if(rosterGoalWarnings.length > 0){
+  // 警告は2つに分けて，それぞれ直せる場所のカードにだけ出す（選手ごと→この選手名簿，チーム全体の件数→下のチーム合計）
+  const goalReport = computeGoalConsistencyWarnings(T, letter);
+  if(goalReport.players.length > 0){
     const rosterWarnBox = document.createElement('div');
     rosterWarnBox.style.cssText = 'background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn);border-radius:6px;padding:8px 10px;font-size:12.5px;margin-bottom:10px;font-weight:600;line-height:1.7;';
-    rosterWarnBox.innerHTML = '⚠ 得点の記録に食い違いがあります：<br>' + rosterGoalWarnings.map(w=>`・${w}`).join('<br>');
+    rosterWarnBox.innerHTML = '⚠ 選手ごとの「得点」欄と「得点本目」欄が合っていません（この表で直せます）：<br>' + goalReport.players.map(w=>`・${w}`).join('<br>');
     roster.appendChild(rosterWarnBox);
   }
   if(T.starterCount){
@@ -3516,11 +3712,10 @@ function renderTeam(teamKey, letter){
   totals.innerHTML = "<h2>チーム合計</h2>";
   totals.appendChild(collapsibleHint(`シュートの行は選手名簿の各期間のシュート数（S前半/S後半/S延前/S延後）から自動的に集計されます。<br>オフサイドの数を増減すると、同じ期間の間接FKの数も連動して増減します。PKの数を増減すると、同じ期間の直接FKの数も連動して増減します（間接FK・直接FKはそれぞれ個別に追加で入力することもできます）。<br>それ以外の項目は手入力してください。<br>「延長前半」「延長後半」の列は、選手名簿カードの「延長戦の列を追加」ボタンを押すと自動的に表示されます（このカードには専用ボタンはありません）。<br>試合結果のスコアは、選手名簿の「得点本目」欄の記入から自動集計されます。選手の「得点」欄・得点経過の記録件数と食い違っている場合は、下に警告が表示されます。`));
 
-  const goalWarnings = computeGoalConsistencyWarnings(T, letter);
-  if(goalWarnings.length > 0){
+  if(goalReport.team.length > 0){
     const warnBox = document.createElement('div');
     warnBox.style.cssText = 'background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn);border-radius:6px;padding:8px 10px;font-size:12.5px;margin-bottom:10px;font-weight:600;line-height:1.7;';
-    warnBox.innerHTML = '⚠ 得点の記録に食い違いがあります：<br>' + goalWarnings.map(w=>`・${w}`).join('<br>');
+    warnBox.innerHTML = '⚠ チーム全体の得点数が，得点経過の件数と合っていません（選手名簿の「得点本目」欄，または得点経過タブを確認してください）：<br>' + goalReport.team.map(w=>`・${w}`).join('<br>');
     totals.appendChild(warnBox);
   }
   const tt = document.createElement('table');
@@ -3645,8 +3840,12 @@ function computeScoreTotals(T){
 // 得点経過（時系列の記録）の3つが食い違っていないかを検証し、警告文のリストを返す。
 // スコアの最終的な数字は「得点本目」のタグ付け件数を集計したものなので、これが選手の「得点」欄や
 // 得点経過の記録件数とズレていると、印刷/PDF出力のスコアが実態と合わなくなる。
+// 戻り値は {players:[…], team:[…]}。以前は1つの配列で，選手名簿のカードとチーム合計のカードの両方が同じ配列を
+// そのまま表示していたため，「チーム合計：…」の警告が2か所に同じ文面で出て，どこを直すべきか分からなかった。
+// 選手ごとの食い違い（players）は選手名簿のカード，チーム全体の件数の食い違い（team）はチーム合計のカードに分けて表示する。
 function computeGoalConsistencyWarnings(T, letter){
   const warnings = [];
+  const teamWarnings = [];
   T.players.forEach(p=>{
     if(!p.no && !p.name) return; // 空行は対象外
     const statedGoals = parseInt(toHalfWidth(p.goals)) || 0;
@@ -3666,12 +3865,22 @@ function computeGoalConsistencyWarnings(T, letter){
   const progressCount = M.goals.filter(g=>g.team===letter && g.completed).length;
   if(taggedTotal !== progressCount){
     if(taggedTotal > progressCount){
-      warnings.push(`チーム合計：選手名簿の「得点本目」から集計したスコアは${taggedTotal}点ですが、得点経過には${progressCount}件しか記録されていません（${taggedTotal-progressCount}件、得点経過への記録漏れの可能性があります）。`);
+      teamWarnings.push(`選手名簿の「得点本目」から集計したスコアは${taggedTotal}点ですが、得点経過には${progressCount}件しか記録されていません（${taggedTotal-progressCount}件、得点経過への記録漏れの可能性があります）。`);
     } else {
-      warnings.push(`チーム合計：得点経過には${progressCount}件記録されていますが、選手名簿の「得点本目」から集計したスコアは${taggedTotal}点です（${progressCount-taggedTotal}件、得点本目への記入漏れの可能性があります）。`);
+      teamWarnings.push(`得点経過には${progressCount}件記録されていますが、選手名簿の「得点本目」から集計したスコアは${taggedTotal}点です（${progressCount-taggedTotal}件、得点本目への記入漏れの可能性があります）。`);
+    }
+    // どこを直せばよいか分かるよう，数え方の内訳を添える
+    const byPlayer = T.players
+      .map(p=>({p, n: countGoalEntries(p.gs1)+countGoalEntries(p.gs2)+countGoalEntries(p.gs3)+countGoalEntries(p.gs4)}))
+      .filter(x=>x.n>0)
+      .map(x=>`${[x.p.no, x.p.name].filter(Boolean).join(' ') || '(背番号未入力の選手)'} ${x.n}件`);
+    teamWarnings.push(`内訳　得点本目の記入（選手名簿）：${byPlayer.length ? byPlayer.join('、') : 'なし'}／得点経過（完成済み）：${progressCount}件`);
+    const incomplete = M.goals.filter(g=>g.team===letter && !g.completed).length;
+    if(incomplete > 0){
+      teamWarnings.push(`得点経過に「完成」ボタンを押していない得点が${incomplete}件あります（完成済みの得点だけが数えられます）。`);
     }
   }
-  return warnings;
+  return {players: warnings, team: teamWarnings};
 }
 
 function tdInput(value, onchange, type='text', cls='', onPaste=null){
@@ -3844,7 +4053,7 @@ function renderEvents(){
   M.goals.forEach(g=>{ if(g.completed && g.everCompleted===undefined) g.everCompleted = true; });
 
   const sec = document.getElementById('sec-events');
-  sec.innerHTML = "";
+  clearSection(sec);
   const c = document.createElement('div'); c.className='card';
   c.innerHTML = "<h2>得点経過</h2>";
   c.appendChild(collapsibleHint(`得点者・アシストは背番号を入力して欄を離れると、選択したチームの選手名簿（Aチーム/Bチームタブ）から位置・氏名が自動で入ります。名簿にない番号の場合は位置・氏名欄に直接入力してください。<br>得点経過は「背番号」を入力し、フィールド図で位置、ボタンでプレイ内容をタップして選んだうえで、緑色の「＋ 経過に追加」ボタンを押すと、1行分が得点経過欄に追記されます。次のプレーも同様に入力して追加していくと、得点までの流れを順番に記録できます（例：「6番 右CK」→「9番 中央-1 H(ヘディング) こぼれ球」→「11番 右-1 〜(ドリブル) スルー」→「7番 中央-1 右足S(シュート)」→「ゴール中央上」のように追加していくと、コーナーキックからヘディングのこぼれ球をドリブルで持ち込み、シュートを決めるまでの流れをそのまま記録できます。なお「ゴール◯◯」（フィールド図の外側にあるゴール枠をタップすると追加されます）は、東京都サッカー協会等の公式の得点経過用語には含まれない、このアプリ独自の追加情報です。省略しても構いません）。手入力での修正も可能です。`));
@@ -4190,7 +4399,7 @@ function cautionReasonRow(c, teamKey, letter){
 ========================================================= */
 function renderPk(){
   const sec = document.getElementById('sec-pk');
-  sec.innerHTML = "";
+  clearSection(sec);
   const c = document.createElement('div'); c.className='card';
   const nameA = M.teamA.name || 'Aチーム';
   const nameB = M.teamB.name || 'Bチーム';
@@ -4358,7 +4567,7 @@ function renderPk(){
 ========================================================= */
 function renderSig(){
   const sec = document.getElementById('sec-sig');
-  sec.innerHTML = "";
+  clearSection(sec);
   const c = document.createElement('div'); c.className='card';
   c.innerHTML = "<h2>署名欄</h2>";
   c.appendChild(collapsibleHint(`各欄をタップすると、大きな署名ウインドウが開きます。指またはタッチペンで枠内に署名し、「完成」を押すと保存されます。間違えた場合は「クリア」で線を消してから書き直せます。<br>署名は印刷/PDF出力にもそのまま画像として反映されます。その場で電子署名をもらうのが難しい場合は、未署名のまま印刷し、原本に直筆で署名してもらうことも引き続き可能です。`));
@@ -4405,7 +4614,7 @@ function buildMatchPreviewCard(){
 
 function renderReview(){
   const sec = document.getElementById('sec-review');
-  sec.innerHTML = "";
+  clearSection(sec);
   const c = document.createElement('div'); c.className='card';
   c.innerHTML = "<h2>戦評</h2>";
   c.appendChild(collapsibleHint(`戦評係が、この試合の内容をもとに戦評（試合の様子や展開を紹介する文章）を記入する欄です。<br>「PDF出力（戦評）」ボタンを押すと、署名欄の代わりにこの戦評が記載された記録PDFを出力できます（通常の「PDF出力（署名）」には戦評は含まれません）。<br>下に試合記録プレビューを表示していますので、シュート本数・得点者・警告退場などを確認しながら執筆できます。`));
@@ -4723,7 +4932,7 @@ function buildPrintSheetHTML(mode){
     let roundCells = ''; for(let i=start+1;i<=end;i++) roundCells += `<th>${i}</th>`;
     let rows = `<tr><th>回数</th>${roundCells}<th></th></tr>`;
     pkPrintOrder.forEach(([side,label])=>{
-      let noCells = ''; for(let i=start;i<end;i++) noCells += `<td>${M.pk[side][i] ? (M.pk[side][i].no||'') : ''}</td>`;
+      let noCells = ''; for(let i=start;i<end;i++) noCells += `<td class="num">${M.pk[side][i] ? (M.pk[side][i].no||'') : ''}</td>`;
       rows += `<tr><th>背番号</th>${noCells}<th></th></tr>`;
       let resCells = '';
       for(let i=start;i<end;i++){
@@ -4983,6 +5192,16 @@ if(typeof window.storage === 'undefined'){
 }
 
 
+/* 上部バーの実際の高さを測って、タブを固定する位置（--topbar-h）に反映する。
+   画面の幅や向きが変わってバーの折り返しが変わっても、タブがバーの裏に隠れない。 */
+{
+  const bar = document.querySelector('.topbar');
+  const syncTopbarH = ()=>{ document.documentElement.style.setProperty('--topbar-h', bar.offsetHeight + 'px'); };
+  syncTopbarH();
+  if(typeof ResizeObserver !== 'undefined') new ResizeObserver(syncTopbarH).observe(bar);
+  window.addEventListener('resize', syncTopbarH);
+}
+
 /* 初期描画 */
 restoreSchoolDB();
 restoreTournamentInfo();
@@ -5005,6 +5224,7 @@ if(autosaveRestored){
   }
 }
 render();
+undoInit();
 </script>
 <script>
 if ((location.protocol === 'https:' || location.hostname === 'localhost') && 'serviceWorker' in navigator) {
